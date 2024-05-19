@@ -168,6 +168,36 @@ class RotateTransform(TransformObject):
         return res_points
 
 
+def rounded_rectangle(src, topLeft, bottomRight, lineColor, cornerRadius):
+    height = bottomRight[1] - topLeft[1]
+    width = bottomRight[0] - topLeft[0]
+    if(cornerRadius <= 0):
+        return cv.rectangle(src, topLeft, bottomRight, lineColor, cv.FILLED)
+    if (cornerRadius*2 > height):
+        cornerRadius = height/2-1
+    elif (cornerRadius*2>width):
+        cornerRadius = width/2 - 1
+    p1 = topLeft
+    p2 = [bottomRight[0], topLeft[1]]
+    p3 = bottomRight
+    p4 = [topLeft[0], bottomRight[1]]
+
+    cv.rectangle(src, (p1[0], p1[1]+cornerRadius), (p3[0], p3[1]-cornerRadius), lineColor, cv.FILLED)
+    cv.rectangle(src, (p1[0]+cornerRadius, p1[1]), (p3[0] - cornerRadius, p3[1]), lineColor, cv.FILLED)
+
+
+    cv.line(src, (p1[0]+cornerRadius, p1[1]),(p2[0]-cornerRadius, p2[1]), lineColor,2, cv.FILLED)
+    cv.line(src, (p2[0], p2[1] + cornerRadius), (p3[0], p3[1] - cornerRadius), lineColor,2, cv.FILLED)
+    cv.line(src, (p3[0] - cornerRadius, p4[1]), (p4[0] + cornerRadius, p3[1]), lineColor,2, cv.FILLED)
+    cv.line(src, (p4[0], p4[1] - cornerRadius), (p1[0], p1[1] + cornerRadius), lineColor,2, cv.FILLED)
+
+    cv.ellipse(src, (p1[0]+cornerRadius, p1[1]+cornerRadius),(cornerRadius, cornerRadius), 180.0, 0, 90, lineColor, cv.FILLED)
+    cv.ellipse(src, (p2[0] - cornerRadius, p2[1] + cornerRadius), (cornerRadius, cornerRadius), 270.0, 0, 90, lineColor, cv.FILLED)
+    cv.ellipse(src, (p3[0] - cornerRadius, p3[1] - cornerRadius), (cornerRadius, cornerRadius), 0.0, 0, 90, lineColor, cv.FILLED)
+    cv.ellipse(src, (p4[0] + cornerRadius, p4[1] - cornerRadius), (cornerRadius, cornerRadius), 90.0, 0, 90, lineColor, cv.FILLED)
+
+
+
 class BlurTransform(TransformObject):
     def __init__(self, *, ksize=(5, 5), name="blur"):
         self.ksize = ksize
@@ -758,6 +788,68 @@ class CircleGridChecker(Checker):
         return {self.get_obj_names()[0]: circle_dist}
 
 
+class SyntheticRectangleGrid(SyntheticObject):
+    def __init__(self, board_size, cell_img_size, side_ratio, grid_type, cornerRadius):
+        self.board_size = board_size
+        self.cell_img_size = cell_img_size
+        self.side_ratio = side_ratio
+        board_image_size = [board_size[0]*cell_img_size, board_size[1]*cell_img_size]
+        self.width = cell_img_size *3 / 4
+        self.height = self.width / side_ratio
+        left_upper_corners = np.zeros(((board_size[0]) * (board_size[1]), 2), np.float32)
+        left_upper_corners[:, :2] = np.mgrid[0:board_size[0], 0:board_size[1]].T.reshape(-1, 2)
+        left_upper_corners *= cell_img_size
+        left_upper_corners += cell_img_size / 4
+        self.corners = np.zeros(((board_size[0]* board_size[1]* 4),2), np.float32)
+        for i in range ((board_size[0]) * (board_size[1])):
+            self.corners[0 + i * 4] = left_upper_corners[i]
+
+            self.corners[1 + i * 4][0] = left_upper_corners[i][0]+self.width
+            self.corners[1 + i * 4][1] = left_upper_corners[i][1]
+
+            self.corners[2 + i * 4][0] = left_upper_corners[i][0] + self.width
+            self.corners[2 + i * 4][1] = left_upper_corners[i][1] + self.height
+
+            self.corners[3 + i * 4][0] = left_upper_corners[i][0]
+            self.corners[3 + i * 4][1] = left_upper_corners[i][1] + self.height
+        self.image = np.full((board_image_size[1], board_image_size[0]), 255, dtype=np.uint8)
+        if (grid_type == "round_rectangle_grid"):
+            for rect in left_upper_corners:
+                rounded_rectangle(self.image,(round(rect[0]), round(rect[1])),(round(rect[0]+self.width), round(rect[1]+self.height)), (0,0,0), cornerRadius)
+        else:
+            for rect in left_upper_corners:
+                cv.rectangle(self.image, (round(rect[0]), round(rect[1])), (round(rect[0]+self.width), round(rect[1]+self.height)), (0, 0, 0), cv.FILLED)
+        self.fields = {"board_size": None, "corners": None}
+        self.history = []
+        background = BackGroundObject(num_rows=int(self.image.shape[0] + cell_img_size),
+                                      num_cols=int(self.image.shape[1] + cell_img_size), color=255)
+        pasting_object = PastingTransform(background_object=background)
+        self.transform_object(pasting_object)
+
+    def transform_object(self, transform_object):
+        self.image = transform_object.transform_image(self.image)
+        self.corners = np.array(transform_object.transform_points(self.corners), dtype=np.float32)
+        if transform_object.name != "":
+            self.history.append(transform_object.name)
+        return self
+
+    def show(self, wait_key=0):
+        assert self.image is not None
+        image = np.copy(self.image)
+        corners = self.corners.reshape(-1, 1, 2)
+        cv.drawChessboardCorners(image, self.board_size, corners, False)
+        cv.imshow("SyntheticRectangleGrid", image)
+        cv.waitKey(wait_key)
+
+    def read(self, path="test", filename="test"):
+        with open(path + "/" + filename + ".json", 'r') as fp:
+            data_loaded = json.load(fp)
+            for name, value in data_loaded.items():
+                setattr(self, name, value)
+            self.corners = np.asarray(self.corners)
+            self.history = []
+        self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
+
 def generate_dataset(args, synthetic_object, background_color=0):
     output = args.dataset_path
     max_size = max(synthetic_object.image.shape[0], synthetic_object.image.shape[1])
@@ -801,7 +893,7 @@ def generate_dataset(args, synthetic_object, background_color=0):
             if not os.path.exists(output + "/" + folder):
                 os.mkdir(output + "/" + folder)
             synthetic_object.write(output + "/" + folder, folder + '_' + str(dictionary[folder]))
-        # synthetic_object.show()
+        #synthetic_object.show()
 
 
 def main():
@@ -831,13 +923,16 @@ def main():
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
     parser.add_argument("--synthetic_object", help="type of synthetic object", default="charuco", action="store",
                         dest="synthetic_object", choices=['aruco', 'charuco', 'chessboard', 'circle_sym_grid',
-                                                          'circle_asym_grid'], type=str)
+                                                          'circle_asym_grid', 'rectangle_grid', 'round_rectangle_grid'], type=str)
     parser.add_argument("--radius_rate", help="circles_radius = cell_img_size/radius_rate (default 5.0)",
                         default="5.", action="store", dest="radius_rate", type=float)
     parser.add_argument("--dict_id", help="The id of the ArUco marker dictionary (default 0)",
                         default=0, action="store", dest="dict_id", type=int)
     parser.add_argument("--seed", help="seed for generate dataset", default="0", action="store", dest="seed", type=int)
-
+    parser.add_argument("--side_ratio", help="rectangle sides ratio (width/height)", default="3", action="store",
+                        dest="side_ratio", type=int)
+    parser.add_argument("--corner_radius", help="how round is rounded rectangle corner is", default="15", action="store",
+                        dest="corner_radius", type=int)
     args = parser.parse_args()
     show_help = args.show_help
     if show_help:
@@ -859,6 +954,7 @@ def main():
         metric = TypeNorm.intersection_over_union
 
     cell_img_size = args.cell_img_size
+    side_ratio = args.side_ratio
 
     if args.synthetic_object == "charuco":
         board_size = [args.board_x, args.board_y]
@@ -880,6 +976,15 @@ def main():
                                                circle_radius=round(cell_img_size/args.radius_rate),
                                                grid_type=args.synthetic_object)
         checker = CircleGridChecker(accuracy_threshold, metric, dataset_path)
+    elif args.synthetic_object == "rectangle_grid" or args.synthetic_object == 'rectangle_grid':
+        board_size = [args.board_x, args.board_y]
+        synthetic_object = SyntheticRectangleGrid(board_size=board_size, cell_img_size=cell_img_size,
+                                                  side_ratio=side_ratio, grid_type="rectangle_grid", cornerRadius=0);
+    elif args.synthetic_object == "round_rectangle_grid" or args.synthetic_object == 'round_rectangle_grid':
+        board_size = [args.board_x, args.board_y]
+        corner_radius = args.corner_radius
+        synthetic_object = SyntheticRectangleGrid(board_size=board_size, cell_img_size=cell_img_size,
+                                                  side_ratio=side_ratio, grid_type="round_rectangle_grid", cornerRadius=corner_radius);
     else:
         synthetic_object = None
         raise TypeError("unknown synthetic_object: " + args.synthetic_object)
