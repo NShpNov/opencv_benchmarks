@@ -874,7 +874,7 @@ class RectangleGridChecker(Checker):
         start = datetime.datetime.now()
         thresh = cv.threshold(gray, 127, 255, cv.THRESH_BINARY)[1]
         contours, rep = cv.findContours(thresh, 1, 1)
-        found_corners = np.zeros(((synthetic_rectangle_board.board_size[0] * synthetic_rectangle_board.board_size[1]* 6),2), np.float32)
+        found_corners = np.zeros(((synthetic_rectangle_board.board_size[0] * synthetic_rectangle_board.board_size[1]* 6 + 12),2), np.float32)
         for i in range(len(contours)):
             for j in range(4):
                 found_corners[i * 4 + j] = (cv.approxPolyExternal(contours[i]))[0][j]
